@@ -3,3 +3,4 @@
 .*
 !.gitignore
 *.h5
+.Rproj.user
