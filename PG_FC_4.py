@@ -3,6 +3,8 @@ import _pickle as pickle
 import gym
 import os
 import pandas as pd
+# %matplotlib inline
+from ggplot import *
 
 from keras import layers
 from keras.models import Model
@@ -21,28 +23,29 @@ from keras import regularizers
 # hyperparameters
 
 # governance
-resume = False # resume from previous checkpoint?
+resume = True # resume from previous checkpoint?
 render = False
 ep_limit = 300001
-ep_batch = 3
+ep_batch = 16
 action_print = 2000
-save_model_freq = 100
-eps_greedy = 0.05
+save_model_freq = 50
+eps_greedy = 0
 
 # nn structure
-k_hidden_dims = [256, 256]
+k_hidden_dims = [2048, 256]
 activation_type = "relu"
 
 # optimiser
-batchSize = 2048 # every how many episodes to do a param update?
+batchSize = 4096 # every how many episodes to do a param update?
 learning_rate = 1e-4
 gamma = 0.99 # discount factor for reward
 decay_rate = 0.99 # decay factor for RMSProp leaky sum of grad^2
 epsilon = 1e-5
 clip_value = 0
-clip_norm = 5
+clip_norm = 0
 
-model_name =  ("H" + str(len(k_hidden_dims)) +  "N" + str(k_hidden_dims[0]) +
+model_name =  ("H" + str(len(k_hidden_dims)) +  "FCA" + str(k_hidden_dims[0]) +
+    "FCB" + str(k_hidden_dims[1]) +
     activation_type + "BS" + str(batchSize) + "LR" + str(learning_rate) + "CV" +
     str(clip_value) + "CN" + str(clip_norm) + "EG" + str(eps_greedy))
 
@@ -72,10 +75,10 @@ def discount_rewards(r):
   return discounted_r
 
 def customLoss(y_true, y_pred):
-    loss = -1 * K.mean(y_true * K.log(y_pred))
+    loss = -1 * K.mean(y_true * K.log(y_pred + 1e-08)) # must add an epsilon to avoid NaNs
     return loss
 
-def build_network(input_dim, output_dim, hidden_dims=k_hidden_dims, lrate = learning_rate, drate = decay_rate, eps = epsilon, act_type = activation_type, cvalue = clip_value, cnorm = clip_norm):
+def build_network(input_dim, output_dim, hidden_dims, lrate, drate, eps, act_type, cvalue, cnorm):
     """Create a base network"""
 
     model = Sequential()
@@ -120,9 +123,11 @@ k_output_shape = 2
 # pd.DataFrame(game_history, columns = ["ep", "score"]).tail(100)["score"].rolling(5).mean().max()
 
 if resume:
-    kmodel = build_network(input_dim = k_input_shape, output_dim = k_output_shape, hidden_dims = k_hidden_dims)
+    kmodel = build_network(input_dim = k_input_shape, output_dim = k_output_shape, hidden_dims=k_hidden_dims, lrate = learning_rate, drate = decay_rate, eps = epsilon, act_type = activation_type, cvalue = clip_value, cnorm = clip_norm)
     kmodel.load_weights("Models/" + model_name + ".h5")
+    # kmodel.load_weights("Models/H2FCA256FCB256reluBS4096LR0.0001CV0CN4EG0.01.h5")
     game_history = pickle.load(open("Histories/game_history_" + model_name + ".p", 'rb'))
+    # game_history = pickle.load(open("Histories/game_history_H2FCA256FCB256reluBS4096LR0.0001CV0CN4EG0.01.p",'rb'))
     episode_number = game_history[-1][0]
     reward_sum = 0
     running_reward = pd.DataFrame(game_history, columns = ["ep", "score"]).tail(100)["score"].mean()
@@ -131,9 +136,11 @@ else:
     episode_number = 0
     reward_sum = 0
     game_history = []
-    kmodel = build_network(input_dim = k_input_shape, output_dim = k_output_shape, hidden_dims = k_hidden_dims)
+    kmodel = build_network(input_dim = k_input_shape, output_dim = k_output_shape, hidden_dims=k_hidden_dims, lrate = learning_rate, drate = decay_rate, eps = epsilon, act_type = activation_type, cvalue = clip_value, cnorm = clip_norm)
 
 move_count = 0
+
+kmodel.summary()
 
 while True:
   if render: env.render()
@@ -201,6 +208,16 @@ while True:
 
     if episode_number % save_model_freq == 0:
         kmodel.save_weights("Models/" + model_name + ".h5")
+        game_history_plot = pd.DataFrame(game_history, columns = ["Ep", "Score"])
+        game_history_plot["EMA100"] = game_history_plot["Score"].ewm(span = 100).mean()
+        newplot = (ggplot(aes(x="Ep", y="Score"), data = game_history_plot) +
+                    geom_point(color = "green") +
+                    geom_line(aes(x = "Ep", y = "EMA100"), color = "blue") +
+                    geom_hline(y = 0, color = "darkorange") +
+                    ggtitle(model_name))
+
+        newplot.save("Plots/" + model_name + ".png")
+
         if running_reward > running_best:
             running_best = running_reward
             kmodel.save_weights("Models/BEST_" + model_name + ".h5")
